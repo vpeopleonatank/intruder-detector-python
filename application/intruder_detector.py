@@ -471,6 +471,7 @@ def intruder_detector():
     else:
         print("Application running in sync mode...")
 
+    prev_frame = None
     while True:
         for idx, video_cap in enumerate(video_caps):
             # Get a new frame
@@ -517,6 +518,29 @@ def intruder_detector():
 
             else:
                 in_frame = cv2.resize(video_cap.frame, (w, h))
+
+                if prev_frame is None:
+                    prev_frame = in_frame.copy()
+                else:
+                    diff = cv2.absdiff(in_frame, prev_frame)
+                    prev_frame = in_frame.copy()
+                    diff_frame = in_frame.copy()
+                    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+                    blur = cv2.GaussianBlur(gray, (5,5), 0)
+                    _, thresh = cv2.threshold(blur, 20, 255, cv2.THRESH_BINARY)
+                    dilated = cv2.dilate(thresh, None, iterations=3)
+                    contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+                    for contour in contours:
+                        (x, y, cw, ch) = cv2.boundingRect(contour)
+
+                        if cv2.contourArea(contour) < 900:
+                            continue
+                        cv2.rectangle(diff_frame, (x, y), (x+cw, y+ch), (0, 255, 0), 2)
+                        cv2.putText(diff_frame, "Status: {}".format('Movement'), (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                                    1, (0, 0, 255), 3)
+                        cv2.imshow("feed", dilated)
+
                 in_frame = in_frame.transpose((2, 0, 1))
                 in_frame = in_frame.reshape((n, c, h, w))
 
