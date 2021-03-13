@@ -1,0 +1,7 @@
+
+application/output/
+application/intruders.log
+application/__pycache__/
+*.mp4
+
+UI/resources/video_data/
