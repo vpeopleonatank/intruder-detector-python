@@ -1,7 +1,9 @@
-
 application/output/
+application/objects/
 application/intruders.log
 application/__pycache__/
 *.mp4
 
 UI/resources/video_data/
+
+application/.idea/

@@ -2,8 +2,8 @@
 
     "inputs": [
 	    {
-            "video": ["../resources/person-bicycle-car-detection.mp4"],
-            "label": [ "person", "bicycle", "car"]
+            "video": ["../resources/people-detection.mp4"],
+            "label": [ "person"]
         }
     ]
 }

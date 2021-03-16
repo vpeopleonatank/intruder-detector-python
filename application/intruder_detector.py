@@ -26,6 +26,8 @@ from __future__ import print_function
 import sys
 import os
 from argparse import ArgumentParser
+
+import aiohttp
 import cv2
 import numpy
 import time
@@ -34,6 +36,10 @@ import json
 import signal
 import pathlib
 from inference import Network
+import requests
+from multiprocessing import Process
+import threading
+
 
 # CONSTANTS
 CONFIG_FILE = "../resources/config.json"
@@ -93,12 +99,12 @@ class VideoCap:
         self.events = []
         self.video_name = 'video{}.mp4'.format(cams)
         self.vw = None
-        
+
     def init(self, size):
         self.no_of_labels = size
         for i in range(size):
             self.last_correct_count.append(0)
-            self.total_count.append(0)  
+            self.total_count.append(0)
             self.changed_count.append(False)
             self.current_count.append(0)
             self.candidate_count.append(0)
@@ -126,11 +132,11 @@ def parse_args():
     global UI
     global CPU_EXTENSION
     global is_async_mode
-    
+
     parser = ArgumentParser()
-    parser.add_argument("-m", "--model", help="Path to an .xml file with a trained model's weights.", 
+    parser.add_argument("-m", "--model", help="Path to an .xml file with a trained model's weights.",
                         required=True, type=str)
-    parser.add_argument("-lb", "--labels", help="Labels mapping file", default=None, 
+    parser.add_argument("-lb", "--labels", help="Labels mapping file", default=None,
                         type=str, required=True)
     parser.add_argument("-d", "--device", help="Device to run the inference (CPU, GPU, MYRIAD, FPGA or HDDL only)."
                                                "To run with multiple devices use MULTI:<device1>,<device2>,etc. "
@@ -153,9 +159,9 @@ def parse_args():
         if args.loop == "True" or args.loop == "true":
             LOOP_VIDEO = True
         elif args.loop == "False" or args.loop == "false":
-            LOOP_VIDEO = False     
+            LOOP_VIDEO = False
         else:
-            print("Invalid input for -lp/--loop. Defaulting to LOOP_VIDEO = False")     
+            print("Invalid input for -lp/--loop. Defaulting to LOOP_VIDEO = False")
             LOOP_VIDEO = False
     if args.flag == "sync":
         is_async_mode = False
@@ -165,10 +171,10 @@ def parse_args():
         if args.user_interface == "True" or args.user_interface == "true":
             UI = True
         elif args.user_interface == "False" or args.user_interface == "false":
-            UI = False     
+            UI = False
         else:
-            print("Invalid input for -ui/--user_interface. Defaulting to UI = False")     
-            UI = False        
+            print("Invalid input for -ui/--user_interface. Defaulting to UI = False")
+            UI = False
 
 
     if args.cpu_extension:
@@ -184,9 +190,10 @@ def check_args():
     global conf_labels_file_path
     global TARGET_DEVICE
 
+
     if model_xml == '':
         return -2
-    
+
     if conf_labels_file_path == '':
         return -3
 
@@ -234,6 +241,24 @@ def get_used_labels(req_labels):
         return [0, labels, used_labels]
 
     return [-6, [], []]
+
+
+TELEGRAM_SCRETKEY = "1612311763:AAGV5bXiYSH1sLVrwz2S-4cnKghXchcha3g"
+CHAT_ID = "-1001442912650"
+RESQUEST_URL = f"https://api.telegram.org/bot{TELEGRAM_SCRETKEY}"
+
+def send_contents_to_telegram(num_of_intruders, image):
+    current_time = time.strftime("%H:%M:%S ngày %d-%m-%Y")
+    messages = f"Phát hiện {num_of_intruders} đối tượng vào lúc {current_time}"
+    message_url = f"{RESQUEST_URL}/sendMessage?chat_id={CHAT_ID}&text={messages}"
+    _ = requests.request("POST", message_url)
+    photo_url = f"{RESQUEST_URL}/sendPhoto?chat_id={CHAT_ID}"
+    _, img_encoded = cv2.imencode('.jpg', image)
+    files = [
+        ('photo', ('', img_encoded.tobytes(), 'image/png'))
+    ]
+
+    _ = requests.request("POST", photo_url, files=files)
 
 
 def get_input():
@@ -305,7 +330,7 @@ def save_json():
             event_json.write("\t\t\t\"content\":\"%s\",\n" % events[i].intruder)
             event_json.write("\t\t\t\"videoTime\":\"%d\"\n" % float(events[i].frame / fps))
             event_json.write("\t\t},\n")
-            data_json.write("\t\t\"%d\": \"%d\",\n" % (float(events[i].frame / fps), events[i].count))      
+            data_json.write("\t\t\"%d\": \"%d\",\n" % (float(events[i].frame / fps), events[i].count))
         event_json.write("\t\t\"%d\":{\n" % events_size)
         event_json.write("\t\t\t\"time\":\"%s\",\n" % events[events_size].time)
         event_json.write("\t\t\t\"content\":\"%s\",\n" % events[events_size].intruder)
@@ -412,7 +437,7 @@ def intruder_detector():
 
     if not os.path.isfile(CONFIG_FILE):
         return -12, ""
-    
+
     if not os.path.isfile(conf_labels_file_path):
         return -13, ""
 
@@ -471,6 +496,7 @@ def intruder_detector():
     else:
         print("Application running in sync mode...")
 
+    count = 0
     prev_frame = None
     while True:
         for idx, video_cap in enumerate(video_caps):
@@ -498,6 +524,7 @@ def intruder_detector():
                 video_cap.current_count[i] = 0
                 video_cap.changed_count[i] = False
 
+            subtracted_objects_count = 0
             # Resize to expected size (in model .xml file)
             # Input frame is resized to infer resolution
             if is_async_mode:
@@ -531,83 +558,104 @@ def intruder_detector():
                     dilated = cv2.dilate(thresh, None, iterations=3)
                     contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-                    for contour in contours:
-                        (x, y, cw, ch) = cv2.boundingRect(contour)
+                    if len(contours) > 0:
+                        cnts = sorted(contours, key=cv2.contourArea, reverse=True)[:2]
+                        # (x, y, cw, ch) = cv2.boundingRect(cnts[0])
+                        # cv2.imwrite(object_name, cropped)
+                        print(len(contours))
+                        for idx, contour in enumerate(cnts):
+                            (x, y, cw, ch) = cv2.boundingRect(contour)
 
-                        if cv2.contourArea(contour) < 900:
-                            continue
-                        cv2.rectangle(diff_frame, (x, y), (x+cw, y+ch), (0, 255, 0), 2)
-                        cv2.putText(diff_frame, "Status: {}".format('Movement'), (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
-                                    1, (0, 0, 255), 3)
-                        cv2.imshow("feed", dilated)
+                            area = cv2.contourArea(contour)
+                            if area < 1000:
+                                continue
+                            subtracted_objects_count += 1
+                            count += 1
+                            object_name = "objects/object_{}.png".format(count)
+                            cv2.rectangle(diff_frame, (x, y), (x+cw, y+ch), (0, 255, 0), 2)
+                            cropped = in_frame[y:y+ch, x:x+cw, :]
+                            cv2.imwrite(object_name, cropped)
+                            cv2.putText(diff_frame, "Status: {}".format('Movement'), (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                                        1, (0, 0, 255), 3)
 
-                in_frame = in_frame.transpose((2, 0, 1))
-                in_frame = in_frame.reshape((n, c, h, w))
+                    cv2.imshow("feed", dilated)
+                    cv2.imshow("diff frame", diff_frame)
 
-                # Start synchronous inference for specified request.
-                infer_network.exec_net(cur_request_id, in_frame)
                 videoCapResult = video_cap
+                if subtracted_objects_count > 0:
+                    pass
+                    in_frame = in_frame.transpose((2, 0, 1))
+                    in_frame = in_frame.reshape((n, c, h, w))
 
-            inf_start = time.time()
-            # Wait for the result
-            if infer_network.wait(cur_request_id) == 0:
-                inf_time = time.time() - inf_start
-                # Results of the output layer of the network
-                res = infer_network.get_output(cur_request_id)
-                for obj in res[0][0]:
-                    label = int(obj[1]) - 1
-                    # Draw the bounding box around the object when the probability is more than specified threshold
-                    if obj[2] > CONF_THRESHOLD_VALUE and used_labels[label]:                   
-                        videoCapResult.current_count[label] += 1
-                        xmin = int(obj[3] * videoCapResult.input_width)
-                        ymin = int(obj[4] * videoCapResult.input_height)
-                        xmax = int(obj[5] * videoCapResult.input_width)
-                        ymax = int(obj[6] * videoCapResult.input_height)
-                        # Draw bounding box around the intruder detected
-                        cv2.rectangle(videoCapResult.frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 4, 16)
+                    # Start synchronous inference for specified request.
+                    infer_network.exec_net(cur_request_id, in_frame)
 
-                for i in range(videoCapResult.no_of_labels):
-                    if videoCapResult.candidate_count[i] == videoCapResult.current_count[i]:
-                        videoCapResult.candidate_confidence[i] += 1
-                    else:
-                        videoCapResult.candidate_confidence[i] = 0
-                        videoCapResult.candidate_count[i] = videoCapResult.current_count[i]
+                    inf_start = time.time()
+                    # Wait for the result
+                    if infer_network.wait(cur_request_id) == 0:
+                        inf_time = time.time() - inf_start
+                        # Results of the output layer of the network
+                        res = infer_network.get_output(cur_request_id)
+                        for obj in res[0][0]:
+                            label = int(obj[1]) - 1
+                            # Draw the bounding box around the object when the probability is more than specified threshold
+                            if obj[2] > CONF_THRESHOLD_VALUE and used_labels[label]:
+                                videoCapResult.current_count[label] += 1
+                                xmin = int(obj[3] * videoCapResult.input_width)
+                                ymin = int(obj[4] * videoCapResult.input_height)
+                                xmax = int(obj[5] * videoCapResult.input_width)
+                                ymax = int(obj[6] * videoCapResult.input_height)
+                                # Draw bounding box around the intruder detected
+                                cv2.rectangle(videoCapResult.frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 4, 16)
 
-                    if videoCapResult.candidate_confidence[i] == CONF_CANDIDATE_CONFIDENCE:
-                        videoCapResult.candidate_confidence[i] = 0
-                        videoCapResult.changed_count[i] = True
-                    else:
-                        continue
+                        for i in range(videoCapResult.no_of_labels):
+                            # Track if there is any change in number of detected objects
+                            if videoCapResult.candidate_count[i] == videoCapResult.current_count[i]:
+                                videoCapResult.candidate_confidence[i] += 1
+                            else:
+                                videoCapResult.candidate_confidence[i] = 1
+                                videoCapResult.candidate_count[i] = videoCapResult.current_count[i]
 
-                    if videoCapResult.current_count[i] > videoCapResult.last_correct_count[i]:
-                        videoCapResult.total_count[i] += videoCapResult.current_count[i] - videoCapResult.last_correct_count[i]
-                        det_objs = videoCapResult.current_count[i] - videoCapResult.last_correct_count[i]
-                        total_count = sum(videoCapResult.total_count)
-                        for det_obj in range(det_objs):
-                            current_time = time.strftime("%H:%M:%S")
-                            log = "{} - Intruder {} detected on {}".format(current_time, label_names[i],
-                                                                           videoCapResult.cam_name)
-                            log_list.append(log)
-                            log_file.write(log + "\n")
-                            event = Event(event_time=current_time, intruder=label_names[i], count=total_count,
-                                          frame=videoCapResult.frame_count)
-                            videoCapResult.events.append(event)
-                            
-                        snapshot_name = "output/intruder_{}.png".format(total_count)
-                        cv2.imwrite(snapshot_name, videoCapResult.frame)
-                    videoCapResult.last_correct_count[i] = videoCapResult.current_count[i]
+                            if videoCapResult.candidate_confidence[i] == CONF_CANDIDATE_CONFIDENCE:
+                                videoCapResult.candidate_confidence[i] = 0
+                                videoCapResult.changed_count[i] = True
+                            else:
+                                continue
 
-                # Create intruder log window, add logs to the frame and display it
-                log_window = numpy.zeros((LOG_WIN_HEIGHT, LOG_WIN_WIDTH, 1), dtype='uint8')
-                for i, log in enumerate(log_list):
-                    cv2.putText(log_window, log, (10, 20 * i + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.imshow("Intruder Log", log_window)
-                videoCapResult.frame_count += 1
+                            if videoCapResult.current_count[i] > videoCapResult.last_correct_count[i]:
+                                videoCapResult.total_count[i] += videoCapResult.current_count[i] - videoCapResult.last_correct_count[i]
+                                det_objs = videoCapResult.current_count[i] - videoCapResult.last_correct_count[i]
+                                total_count = sum(videoCapResult.total_count)
+                                for det_obj in range(det_objs):
+                                    current_time = time.strftime("%H:%M:%S")
+                                    log = "{} - Intruder {} detected on {}".format(current_time, label_names[i],
+                                                                                   videoCapResult.cam_name)
+                                    log_list.append(log)
+                                    log_file.write(log + "\n")
+                                    event = Event(event_time=current_time, intruder=label_names[i], count=total_count,
+                                                  frame=videoCapResult.frame_count)
+                                    videoCapResult.events.append(event)
+
+                                snapshot_name = "output/intruder_{}.png".format(total_count)
+                                cv2.imwrite(snapshot_name, videoCapResult.frame)
+                                th = threading.Thread(target=send_contents_to_telegram,
+                                                      args=(det_objs, videoCapResult.frame))
+                                th.start()
+                                # p = Process(target=send_contents_to_telegram(total_count, videoCapResult.frame))
+                                # p.start()
+                            videoCapResult.last_correct_count[i] = videoCapResult.current_count[i]
+
+                        # Create intruder log window, add logs to the frame and display it
+                        log_window = numpy.zeros((LOG_WIN_HEIGHT, LOG_WIN_WIDTH, 1), dtype='uint8')
+                        for i, log in enumerate(log_list):
+                            cv2.putText(log_window, log, (10, 20 * i + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                        cv2.imshow("Intruder Log", log_window)
+                        videoCapResult.frame_count += 1
 
                 # Video output
                 if UI and not LOOP_VIDEO:
                     videoCapResult.vw.write(videoCapResult.frame)
-    
+
                 log_message = "Async mode is on." if is_async_mode else \
                     "Async mode is off."
                 cv2.putText(videoCapResult.frame, log_message, (10, int(videoCapResult.input_height) - 50),
@@ -638,12 +686,21 @@ def intruder_detector():
                 # Swap infer request IDs
                 cur_request_id, next_request_id = next_request_id, cur_request_id
 
-        if cv2.waitKey(1) == 27:
+        key = cv2.waitKey(1)
+        if key == 27:
             break
+        elif key == ord('p'):
+            # while 1:
+            #     print('in while')
+            #     if cv2.waitKey(0) == ord('c'):
+            #         break
+            cv2.waitKey()
+        elif cv2.waitKey(1) == ord('c'):
+            pass
 
-        if cv2.waitKey(1) == 9:
-            is_async_mode = not is_async_mode
-            print("Switched to {} mode".format("async" if is_async_mode else "sync"))
+        # if key == 9:
+        #     is_async_mode = not is_async_mode
+        #     print("Switched to {} mode".format("async" if is_async_mode else "sync"))
 
         if False not in no_more_data:
             break
