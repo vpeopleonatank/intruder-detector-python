@@ -54,7 +54,7 @@ CONF_THRESHOLD_VALUE = 0.55
 LOG_FILE_PATH = "./intruders.log"
 LOG_WIN_HEIGHT = 432
 LOG_WIN_WIDTH = 410
-CONF_CANDIDATE_CONFIDENCE = 4
+CONF_CANDIDATE_CONFIDENCE = 5
 CODEC = 0x31637661
 
 # Opencv windows per each row
@@ -66,6 +66,7 @@ model_bin = ''
 conf_labels_file_path = ''
 accepted_devices = ["CPU", "GPU", "HETERO:FPGA,CPU", "MYRIAD", "HDDL"]
 video_caps = []
+rtsp_mode = False
 is_async_mode = True
 
 
@@ -79,8 +80,8 @@ class Event:
 
 
 # VideoCap class to manage the input source
-class VideoCap:
-    def __init__(self, vc, cam_name, cams, is_cam):
+class VideoCap(threading.Thread):
+    def __init__(self, vc, cam_name, cams, is_cam, is_rtsp=False):
         self.input_width = vc.get(3)
         self.input_height = vc.get(4)
         self.vc = vc
@@ -99,6 +100,75 @@ class VideoCap:
         self.events = []
         self.video_name = 'video{}.mp4'.format(cams)
         self.vw = None
+        self.is_rtsp = is_rtsp
+
+        if self.is_rtsp:
+            assert self.vc.isOpened()
+
+            # this lets the read() method block until there's a new frame
+            self.cond = threading.Condition()
+
+            # this allows us to stop the thread gracefully
+            self.running = False
+
+            # keeping the newest frame around
+            self.frame = None
+
+            # passing a sequence number allows read() to NOT block
+            # if the currently available one is exactly the one you ask for
+            self.latestnum = 0
+
+            # this is just for demo purposes		
+            self.callback = None
+            
+            super().__init__(name='FreshestFrame')
+            self.start()
+
+    def start(self):
+        self.running = True
+        super().start()
+
+    def release(self, timeout=None):
+        self.running = False
+        self.join(timeout=timeout)
+        self.vc.release()
+
+    def run(self):
+        counter = 0
+        while self.running:
+            # block for fresh frame
+            (self.rv, img) = self.vc.read()
+            assert self.rv
+            counter += 1
+
+            # publish the frame
+            with self.cond: # lock the condition for this operation
+                self.frame = img if self.rv else None
+                self.latestnum = counter
+                self.cond.notify_all()
+
+            if self.callback:
+                self.callback(img)
+
+    def read(self, wait=True, seqnumber=None, timeout=None):
+        # with no arguments (wait=True), it always blocks for a fresh frame
+        # with wait=False it returns the current frame immediately (polling)
+        # with a seqnumber, it blocks until that frame is available (or no wait at all)
+        # with timeout argument, may return an earlier frame;
+        #   may even be (0,None) if nothing received yet
+
+        with self.cond:
+            if wait:
+                if seqnumber is None:
+                    seqnumber = self.latestnum+1
+                if seqnumber < 1:
+                    seqnumber = 1
+                
+                self.rv = self.cond.wait_for(lambda: self.latestnum >= seqnumber, timeout=timeout)
+                if not self.rv:
+                    return (self.rv, self.latestnum, self.frame)
+
+            return (self.rv, self.latestnum, self.frame)
 
     def init(self, size):
         self.no_of_labels = size
@@ -271,6 +341,7 @@ def get_input():
     """
     global CONFIG_FILE
     global video_caps
+    global rtsp_mode
     labels = []
     streams = []
 
@@ -282,6 +353,9 @@ def get_input():
             cam_name = "Cam {}".format(idx)
             if video.isdigit():
                 video_cap = VideoCap(cv2.VideoCapture(int(video)), cam_name, cams, is_cam=True)
+            elif "rtsp" in video:
+                rtsp_mode = True
+                video_cap = VideoCap(cv2.VideoCapture(video), cam_name, cams, is_cam=True, is_rtsp=True)
             else:
                 if os.path.isfile(video):
                     video_cap = VideoCap(cv2.VideoCapture(video), cam_name, cams, is_cam=False)
@@ -496,7 +570,7 @@ def intruder_detector():
     else:
         print("Application running in sync mode...")
 
-    count = 0
+    cnt = 0
     prev_frame = None
     while True:
         for idx, video_cap in enumerate(video_caps):
@@ -506,7 +580,10 @@ def intruder_detector():
                 if is_async_mode:
                     ret, video_cap.next_frame = video_cap.vc.read()
                 else:
-                    ret, video_cap.frame = video_cap.vc.read()
+                    if rtsp_mode:
+                        ret, cnt, video_cap.frame = video_cap.read(seqnumber=cnt+1)
+                    else:
+                        ret, video_cap.frame = video_cap.vc.read()
                 video_cap.loop_frames += 1
                 # If no new frame or error in reading a frame, exit the loop
                 if not ret:
@@ -559,31 +636,23 @@ def intruder_detector():
                     contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
                     if len(contours) > 0:
-                        cnts = sorted(contours, key=cv2.contourArea, reverse=True)[:2]
-                        # (x, y, cw, ch) = cv2.boundingRect(cnts[0])
-                        # cv2.imwrite(object_name, cropped)
-                        print(len(contours))
-                        for idx, contour in enumerate(cnts):
+                        for idx, contour in enumerate(contours):
                             (x, y, cw, ch) = cv2.boundingRect(contour)
 
                             area = cv2.contourArea(contour)
                             if area < 1000:
                                 continue
                             subtracted_objects_count += 1
-                            count += 1
-                            object_name = "objects/object_{}.png".format(count)
                             cv2.rectangle(diff_frame, (x, y), (x+cw, y+ch), (0, 255, 0), 2)
-                            cropped = in_frame[y:y+ch, x:x+cw, :]
-                            cv2.imwrite(object_name, cropped)
                             cv2.putText(diff_frame, "Status: {}".format('Movement'), (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
                                         1, (0, 0, 255), 3)
 
                     cv2.imshow("feed", dilated)
+                    cv2.imshow("diff", diff)
                     cv2.imshow("diff frame", diff_frame)
 
                 videoCapResult = video_cap
                 if subtracted_objects_count > 0:
-                    pass
                     in_frame = in_frame.transpose((2, 0, 1))
                     in_frame = in_frame.reshape((n, c, h, w))
 

@@ -120,7 +120,38 @@ def check_args():
     return 0
 
 def main():
-    pass
+
+    # pass
+    import urllib.request
+    import cv2
+    import numpy as np
+    import ssl
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    url = 'http://192.168.43.1:8080/shot.jpg?rnd=726410'
+    img_index = 0
+
+    cap = cv2.VideoCapture('rtsp://192.168.43.1:8080/h264_pcm.sdp')
+    while True:
+        # imgResp = urllib.request.urlopen(url)
+        # imgNp = np.array(bytearray(imgResp.read()), dtype=np.uint8)
+        # img = cv2.imdecode(imgNp, -1)
+        _, img = cap.read()
+        cv2.imshow('temp', cv2.resize(img, (600, 400)))
+        q = cv2.waitKey(1)
+        if q == ord("q"):
+            break
+        elif q == ord("s"):
+            cv2.imwrite('./output_from_stream/img_' + str(img_index) + '.jpg', cv2.resize(img, (600, 400)))
+            img_index += 1
+            print("Saved")
+
+    cv2.destroyAllWindows()
+
+    
 
 if __name__ == '__main__':
     main()
