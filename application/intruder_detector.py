@@ -35,6 +35,8 @@ import collections
 import json
 import signal
 import pathlib
+
+from numpy.lib.function_base import copy
 from inference import Network
 import requests
 from multiprocessing import Process
@@ -318,10 +320,13 @@ CHAT_ID = "-1001442912650"
 RESQUEST_URL = f"https://api.telegram.org/bot{TELEGRAM_SCRETKEY}"
 
 def send_contents_to_telegram(num_of_intruders, image):
-    current_time = time.strftime("%H:%M:%S ngày %d-%m-%Y")
-    messages = f"Phát hiện {num_of_intruders} đối tượng vào lúc {current_time}"
-    message_url = f"{RESQUEST_URL}/sendMessage?chat_id={CHAT_ID}&text={messages}"
-    _ = requests.request("POST", message_url)
+    current_time = time.strftime("%H:%M:%S ngay %d-%m-%Y")
+    # messages = f"Phát hiện {num_of_intruders} đối tượng vào lúc {current_time}"
+    messages = f"Phat hien {num_of_intruders} doi tuong vao luc {current_time}"
+    cv2.putText(image, messages, (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (0, 0, 255), 5)
+    # message_url = f"{RESQUEST_URL}/sendMessage?chat_id={CHAT_ID}&text={messages}"
+    # _ = requests.request("POST", message_url)
     photo_url = f"{RESQUEST_URL}/sendPhoto?chat_id={CHAT_ID}"
     _, img_encoded = cv2.imencode('.jpg', image)
     files = [
@@ -706,9 +711,10 @@ def intruder_detector():
                                     videoCapResult.events.append(event)
 
                                 snapshot_name = "output/intruder_{}.png".format(total_count)
-                                cv2.imwrite(snapshot_name, videoCapResult.frame)
+                                captured_image = numpy.array(videoCapResult.frame)
+                                cv2.imwrite(snapshot_name, captured_image)
                                 th = threading.Thread(target=send_contents_to_telegram,
-                                                      args=(det_objs, videoCapResult.frame))
+                                                      args=(det_objs, captured_image))
                                 th.start()
                                 # p = Process(target=send_contents_to_telegram(total_count, videoCapResult.frame))
                                 # p.start()
