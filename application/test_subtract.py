@@ -4,7 +4,7 @@ import numpy as np
 # Capturing video
 # video = cv2.VideoCapture(0)
 # video = cv2.VideoCapture('cap.mp4')
-video = cv2.VideoCapture('vtest.avi')
+video = cv2.VideoCapture('rtsp://192.168.43.1:8080/h264_ulaw.sdp')
 # video = cv2.VideoCapture('rtsp://root:root@27.72.56.161:554/axis-media/media.amp')
 
 frame_width = int(video.get(3))
