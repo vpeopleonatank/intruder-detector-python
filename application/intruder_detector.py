@@ -322,7 +322,8 @@ RESQUEST_URL = f"https://api.telegram.org/bot{TELEGRAM_SCRETKEY}"
 def send_contents_to_telegram(num_of_intruders, image):
     current_time = time.strftime("%H:%M:%S ngay %d-%m-%Y")
     # messages = f"Phát hiện {num_of_intruders} đối tượng vào lúc {current_time}"
-    messages = f"Phat hien {num_of_intruders} doi tuong vao luc {current_time}"
+    # messages = f"Phat hien {num_of_intruders} doi tuong vao luc {current_time}"
+    messages = f"Phat hien doi tuong xam nhap vao luc {current_time}"
     cv2.putText(image, messages, (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (0, 0, 255), 5)
     # message_url = f"{RESQUEST_URL}/sendMessage?chat_id={CHAT_ID}&text={messages}"
