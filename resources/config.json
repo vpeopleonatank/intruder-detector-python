@@ -2,7 +2,7 @@
 
     "inputs": [
 	    {
-            "video": ["../resources/person-bicycle-car-detection.mp4"],
+            "video": ["http://192.168.43.1:8080/video"],
             "label": [ "person"]
         }
     ]

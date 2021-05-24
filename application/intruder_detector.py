@@ -362,6 +362,8 @@ def get_input():
             elif "rtsp" in video:
                 rtsp_mode = True
                 video_cap = VideoCap(cv2.VideoCapture(video), cam_name, cams, is_cam=True, is_rtsp=True)
+            elif "http" in video:
+                video_cap = VideoCap(cv2.VideoCapture(video), cam_name, cams, is_cam=True)
             else:
                 if os.path.isfile(video):
                     video_cap = VideoCap(cv2.VideoCapture(video), cam_name, cams, is_cam=False)
